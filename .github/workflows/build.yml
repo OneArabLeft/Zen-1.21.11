@@ -16,22 +16,19 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Gradle
+      - name: Install Gradle 8.8
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.8'
 
-      - name: Download wrapper jar and gradlew
-        run: |
-          mkdir -p gradle/wrapper
-          curl -fsSL "https://services.gradle.org/distributions/gradle-8.8-wrapper.jar" \
-            -o gradle/wrapper/gradle-wrapper.jar
-          curl -fsSL "https://raw.githubusercontent.com/gradle/gradle/refs/tags/v8.8.0/subprojects/wrapper/src/main/executable/gradlew" \
-            -o gradlew
-          chmod +x gradlew
-          printf "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.8-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n" \
-            > gradle/wrapper/gradle-wrapper.properties
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: gradle-${{ hashFiles('**/*.gradle*') }}
 
       - name: Build
-        run: ./gradlew build --no-daemon
+        run: gradle build --no-daemon
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
