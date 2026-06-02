@@ -1,0 +1,25 @@
+name: Build JAR
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*') }}
+      - run: chmod +x gradlew
+      - run: ./gradlew build --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slayer-carry-tracker
+          path: build/libs/slayer-carry-tracker-*.jar
