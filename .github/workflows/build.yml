@@ -24,10 +24,20 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-      - name: Fix gradlew (re-download in case of upload corruption)
+      - name: Fix Gradle wrapper files
         run: |
           curl -fsSL https://raw.githubusercontent.com/gradle/gradle/v8.8.0/gradlew -o gradlew
           chmod +x gradlew
+          mkdir -p gradle/wrapper
+          curl -fsSL "https://repo.maven.apache.org/maven2/org/gradle/gradle-wrapper/8.8/gradle-wrapper-8.8.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar
+          cat > gradle/wrapper/gradle-wrapper.properties << 'PROPS'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.8-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          PROPS
 
       - name: Build
         run: ./gradlew build --no-daemon
