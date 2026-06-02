@@ -1,0 +1,354 @@
+package com.sct.hud;
+
+import com.sct.SCTClient;
+import com.sct.config.SCTConfig;
+import com.sct.config.SessionStorage;
+import com.sct.feature.CarrySession;
+import com.sct.feature.CarryManager;
+import com.sct.feature.SlayerType;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.text.Text;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Zen-style GUI — two tabs:
+ *   Carries : session list, inline coins editor, action buttons, earnings summary
+ *   Settings: toggle grid for all config booleans
+ */
+public class CarryScreen extends Screen {
+
+    private static final int TAB_CARRIES = 0;
+    private static final int TAB_SETTINGS = 1;
+
+    private int  tab      = TAB_CARRIES;
+    private final CarryManager mgr;
+    private List<CarrySession> rows = new ArrayList<>();
+    private int  selected  = -1;
+    private int  scroll    = 0;
+
+    private static final int ROW_H  = 60;
+    private static final int LIST_Y = 78;
+
+    private TextFieldWidget coinsField;
+
+    // ─────────────────────────────────────────────────────────────
+
+    public CarryScreen(CarryManager mgr) {
+        super(Text.literal("Slayer Carry Tracker"));
+        this.mgr = mgr;
+    }
+
+    // ── init ─────────────────────────────────────────────────────
+
+    @Override
+    protected void init() {
+        super.init();
+        rows = new ArrayList<>(mgr.all());
+
+        int cx = width / 2;
+
+        // Tab bar
+        addDrawableChild(ButtonWidget.builder(Text.literal("§eCarries"), b -> setTab(TAB_CARRIES))
+                .dimensions(cx - 100, 5, 94, 16).build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("§bSettings"), b -> setTab(TAB_SETTINGS))
+                .dimensions(cx + 6, 5, 94, 16).build());
+
+        // Bottom actions
+        addDrawableChild(ButtonWidget.builder(Text.literal("Add Carry"), b -> {
+            close();
+            if (client != null && client.player != null)
+                client.player.sendMessage(Text.literal(
+                    "§6[SCT] §e/sct add <player> <type> <bosses> [coinsEach]"), false);
+        }).dimensions(cx - 188, height - 24, 116, 16).build());
+
+        addDrawableChild(ButtonWidget.builder(Text.literal("Clear Finished"), b -> {
+            mgr.removeFinished(); SessionStorage.save(mgr);
+            selected = -1; rows = new ArrayList<>(mgr.all()); rebuildCoinsField();
+        }).dimensions(cx - 58, height - 24, 116, 16).build());
+
+        addDrawableChild(ButtonWidget.builder(Text.literal("Close [Esc]"), b -> close())
+                .dimensions(cx + 72, height - 24, 116, 16).build());
+
+        rebuildCoinsField();
+    }
+
+    private void setTab(int t) {
+        tab = t; selected = -1; rebuildCoinsField();
+    }
+
+    // ── render ────────────────────────────────────────────────────
+
+    @Override
+    public void render(DrawContext ctx, int mx, int my, float delta) {
+        renderBackground(ctx, mx, my, delta);
+        if (tab == TAB_CARRIES) renderCarries(ctx, mx, my);
+        else renderSettings(ctx, mx, my);
+        super.render(ctx, mx, my, delta);
+    }
+
+    // ── CARRIES tab ───────────────────────────────────────────────
+
+    private void renderCarries(DrawContext ctx, int mx, int my) {
+        int cx = width / 2;
+        int pw = Math.min(620, width - 32), px = cx - pw / 2;
+
+        // Header
+        ctx.drawCenteredTextWithShadow(textRenderer, "§6✦ Slayer Carry Tracker ✦", cx, 26, 0xFFFFFF);
+
+        // Earnings bar
+        long owed = mgr.grandTotalOwed(), earned = mgr.grandTotalEarned();
+        long owng = Math.max(0, owed - earned);
+        String earningsStr = "§7Earned §6" + SlayerType.formatCoins(earned)
+            + "  §7Owed §6" + SlayerType.formatCoins(owed)
+            + (owng > 0 ? "  §cOwing §6" + SlayerType.formatCoins(owng) : "  §a✔ All paid");
+        ctx.drawCenteredTextWithShadow(textRenderer, earningsStr, cx, 40, 0xCCCCCC);
+
+        // Column headers
+        int hy = LIST_Y - 14;
+        ctx.fill(px, hy+11, px+pw, hy+12, 0xFF3A3A3A);
+        ctx.drawText(textRenderer, "§7Player",       px+20,  hy, 0xAAAAAA, false);
+        ctx.drawText(textRenderer, "§7Type",         px+130, hy, 0xAAAAAA, false);
+        ctx.drawText(textRenderer, "§7Kills/Paid",   px+240, hy, 0xAAAAAA, false);
+        ctx.drawText(textRenderer, "§7¢/Carry",      px+320, hy, 0xAAAAAA, false);
+        ctx.drawText(textRenderer, "§7Earned / Owed",px+420, hy, 0xAAAAAA, false);
+
+        int vis = visRows();
+        String activeKey = mgr.getActivePlayer() != null ? mgr.getActivePlayer().toLowerCase() : "";
+
+        for (int i = scroll; i < Math.min(rows.size(), scroll+vis); i++) {
+            CarrySession s = rows.get(i);
+            int ry = LIST_Y + (i-scroll) * ROW_H;
+            boolean isActive = s.getPlayer().toLowerCase().equals(activeKey);
+            boolean isSel    = i == selected;
+            boolean isHover  = mx >= px && mx <= px+pw && my >= ry && my < ry+ROW_H-2;
+            renderRow(ctx, s, px, pw, ry, isActive, isSel, isHover, i);
+        }
+
+        if (rows.isEmpty()) {
+            ctx.drawCenteredTextWithShadow(textRenderer, "§7No active carry sessions.", cx, LIST_Y+28, 0x888888);
+            ctx.drawCenteredTextWithShadow(textRenderer,
+                "§eUse /sct add <player> <type> <bosses> [coins]", cx, LIST_Y+44, 0x666666);
+        }
+
+        if (rows.size() > vis)
+            ctx.drawText(textRenderer, "§7" + (scroll+1) + "–"
+                + Math.min(scroll+vis, rows.size()) + " / " + rows.size()
+                + "  (scroll)", px, height-40, 0x666666, false);
+    }
+
+    private void renderRow(DrawContext ctx, CarrySession s, int px, int pw,
+                           int ry, boolean active, boolean sel, boolean hover, int idx) {
+        int bg = sel ? 0xCC2B3E55 : active ? 0xCC1A2B18 : hover ? 0xCC222222 : 0xCC141414;
+        ctx.fill(px, ry, px+pw, ry+ROW_H-2, bg);
+
+        // Active left stripe (type colour)
+        if (active) ctx.fill(px, ry, px+3, ry+ROW_H-2, 0xFF000000|s.getType().color);
+
+        // Boss-up pulse dot
+        if (s.isBossUp()) {
+            long ms = System.currentTimeMillis() - s.getBossUpTime();
+            int p   = (int)(140 + 115 * Math.sin(ms/250.0*Math.PI));
+            ctx.fill(px+pw-14, ry+4, px+pw-7, ry+11, argb(255, p, 0, 0));
+            ctx.drawText(textRenderer, "§cBOSS!", px+pw-48, ry+4, 0xFFFF4444, true);
+        }
+
+        // Status + player
+        ctx.drawText(textRenderer, s.isDone() ? "§a✓" : "§c●", px+5,  ry+5, 0xFFFFFF, false);
+        ctx.drawText(textRenderer, (active ? "§e" : "§f") + s.getPlayer(), px+17, ry+5, 0xFFFFFF, false);
+
+        // Type
+        ctx.drawText(textRenderer, s.getType().displayName, px+130, ry+5,
+                0xFF000000|s.getType().color, false);
+
+        // Kills/Paid
+        ctx.drawText(textRenderer, "§a"+s.getKilled()+" §7/ §c"+s.getPaid(), px+240, ry+5, 0xFFFFFF, false);
+
+        // Coins/carry (text when not selected; "edit↓" when selected — field renders itself)
+        if (!sel)
+            ctx.drawText(textRenderer,
+                s.getCoinsEach() > 0 ? "§6"+SlayerType.formatCoins(s.getCoinsEach()) : "§7—",
+                px+320, ry+5, 0xFFFFFF, false);
+        else
+            ctx.drawText(textRenderer, "§7edit ↓", px+320, ry+5, 0x777777, false);
+
+        // Earned/Owed
+        if (s.getCoinsEach() > 0)
+            ctx.drawText(textRenderer,
+                "§a"+SlayerType.formatCoins(s.coinsEarned())
+                +" §7/ §6"+SlayerType.formatCoins(s.totalOwed()),
+                px+420, ry+5, 0xFFFFFF, false);
+        else
+            ctx.drawText(textRenderer, "§7—", px+420, ry+5, 0x555555, false);
+
+        // Progress bar
+        int pbx = px+5, pby = ry+ROW_H-14, pbw = sel ? pw-160 : pw-10;
+        ctx.fill(pbx, pby, pbx+pbw, pby+5, 0xFF1E1E1E);
+        int fc = s.isDone() ? 0xFF00FF55 : 0xFF009FFF;
+        ctx.fill(pbx, pby, pbx+(int)(pbw*s.progress()), pby+5, fc);
+        ctx.drawText(textRenderer, "§7"+(int)(s.progress()*100)+"%",
+                pbx+pbw+4, pby-1, 0x999999, false);
+
+        // Action row (selected only)
+        if (sel) {
+            int ay = ry + ROW_H - 18;
+            ctx.drawText(textRenderer, "§b[Set Active]", px+5,   ay, 0xFF55FFFF, false);
+            ctx.drawText(textRenderer, "§a[+Kill]",      px+90,  ay, 0xFF55FF55, false);
+            ctx.drawText(textRenderer, "§c[Remove]",     px+144, ay, 0xFFFF5555, false);
+            ctx.drawText(textRenderer, "§7¢/carry:",     px+208, ay+1, 0x888888, false);
+            // TextFieldWidget renders at px+260, ay (see rebuildCoinsField)
+        }
+    }
+
+    // ── SETTINGS tab ─────────────────────────────────────────────
+
+    /** (key, label, getter/setter via reflection) */
+    private static final String[][] SETTINGS = {
+        {"carryEnabled",         "Carry Tracker Enabled"},
+        {"bossSpawnAlert",       "Boss Spawn Alert"},
+        {"highlightBoss",        "Highlight Boss"},
+        {"highlightCarryPlayer", "Highlight Carry Player"},
+        {"hudEnabled",           "HUD Widget"},
+        {"autoDetectKills",      "Auto-detect Kills from Chat"},
+        {"sendCarryCount",       "Announce Kills to Party"},
+    };
+
+    private void renderSettings(DrawContext ctx, int mx, int my) {
+        int cx = width / 2, y = 46;
+        ctx.drawCenteredTextWithShadow(textRenderer, "§bSettings", cx, y, 0xFFFFFF);
+        y += 18;
+
+        for (String[] opt : SETTINGS) {
+            boolean on = getBool(opt[0]);
+            int rowCol = on ? 0xCC142014 : 0xCC201414;
+            boolean hover = mx >= cx-110 && mx <= cx+110 && my >= y && my <= y+13;
+            ctx.fill(cx-110, y-1, cx+110, y+12, hover ? (on ? 0xCC1C3020 : 0xCC301C1C) : rowCol);
+            ctx.drawText(textRenderer, "  §f" + opt[1], cx-108, y+1, 0xDDDDDD, false);
+            ctx.drawText(textRenderer, on ? "§aON" : "§cOFF",
+                    cx+85, y+1, on ? 0xFF55FF55 : 0xFFFF5555, false);
+            y += 15;
+        }
+
+        y += 8;
+        ctx.drawText(textRenderer, "§7Click a setting above to toggle it.", cx-108, y, 0x777777, false);
+        y += 12;
+        ctx.drawText(textRenderer, "§7HUD widget position: drag it in-game while this screen is closed.", cx-108, y, 0x666666, false);
+        y += 12;
+        ctx.drawText(textRenderer, "§7[K] open menu  [;] quick-record kill  /sct help", cx-108, y, 0x666666, false);
+    }
+
+    // ── mouse / keyboard ─────────────────────────────────────────
+
+    @Override
+    public boolean mouseClicked(double mx, double my, int btn) {
+        if (tab == TAB_CARRIES)  return handleCarriesClick(mx, my, btn);
+        if (tab == TAB_SETTINGS) return handleSettingsClick(mx, my, btn);
+        return super.mouseClicked(mx, my, btn);
+    }
+
+    private boolean handleCarriesClick(double mx, double my, int btn) {
+        int cx = width/2, pw = Math.min(620, width-32), px = cx-pw/2;
+        int vis = visRows();
+        for (int i = scroll; i < Math.min(rows.size(), scroll+vis); i++) {
+            int ry = LIST_Y + (i-scroll)*ROW_H;
+            if (mx < px || mx > px+pw || my < ry || my >= ry+ROW_H-2) continue;
+            if (i == selected) {
+                CarrySession s = rows.get(i);
+                int ay = ry + ROW_H - 18;
+                if (my >= ay) {
+                    if      (mx >= px+5  && mx <= px+86)  { mgr.setActive(s.getPlayer()); return true; }
+                    else if (mx >= px+90 && mx <= px+135) {
+                        mgr.recordKill(s.getPlayer()); SCTClient.hud.triggerKillFlash(s);
+                        SessionStorage.save(mgr); rows = new ArrayList<>(mgr.all()); return true;
+                    }
+                    else if (mx >= px+144&& mx <= px+206) {
+                        mgr.remove(s.getPlayer()); SessionStorage.save(mgr);
+                        selected = -1; rows = new ArrayList<>(mgr.all()); rebuildCoinsField(); return true;
+                    }
+                }
+            } else { selected = i; rebuildCoinsField(); }
+            return super.mouseClicked(mx, my, btn);
+        }
+        boolean res = super.mouseClicked(mx, my, btn);
+        if (!res) { selected = -1; rebuildCoinsField(); }
+        return res;
+    }
+
+    private boolean handleSettingsClick(double mx, double my, int btn) {
+        int cx = width/2, y = 64;
+        for (String[] opt : SETTINGS) {
+            if (mx >= cx-110 && mx <= cx+110 && my >= y && my <= y+13) {
+                toggleBool(opt[0]); SCTConfig.save(); return true;
+            }
+            y += 15;
+        }
+        return super.mouseClicked(mx, my, btn);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mx, double my, double h, double v) {
+        if (tab == TAB_CARRIES) {
+            int vis = visRows();
+            if (v < 0 && scroll + vis < rows.size()) scroll++;
+            if (v > 0 && scroll > 0) scroll--;
+            rebuildCoinsField();
+        }
+        return true;
+    }
+
+    @Override
+    public boolean keyPressed(int key, int scan, int mods) {
+        if (coinsField != null && coinsField.isFocused() && (key == 257 || key == 256)) {
+            setFocused(null); SessionStorage.save(mgr); return true;
+        }
+        return super.keyPressed(key, scan, mods);
+    }
+
+    // ── coins field ───────────────────────────────────────────────
+
+    private void rebuildCoinsField() {
+        if (coinsField != null) { remove(coinsField); coinsField = null; }
+        if (tab != TAB_CARRIES || selected < 0 || selected >= rows.size()) return;
+        int vis = visRows();
+        if (selected < scroll || selected >= scroll+vis) return;
+
+        int cx = width/2, pw = Math.min(620, width-32), panelX = cx-pw/2;
+        int ry = LIST_Y + (selected-scroll)*ROW_H;
+        int ay = ry + ROW_H - 18;
+
+        CarrySession s = rows.get(selected);
+        coinsField = new TextFieldWidget(textRenderer, panelX+260, ay, 92, 12, Text.literal(""));
+        coinsField.setMaxLength(13);
+        coinsField.setText(s.getCoinsEach() > 0 ? String.valueOf(s.getCoinsEach()) : "");
+        coinsField.setPlaceholder(Text.literal("coins/carry"));
+        coinsField.setChangedListener(t -> {
+            try { rows.get(selected).setCoinsEach(Long.parseLong(t.replace(",","").replace("_","").trim())); }
+            catch (NumberFormatException ignored) { if (t.isBlank()) rows.get(selected).setCoinsEach(0); }
+        });
+        addDrawableChild(coinsField);
+    }
+
+    // ── helpers ───────────────────────────────────────────────────
+
+    private int visRows() { return Math.max(1, (height - LIST_Y - 32) / ROW_H); }
+
+    private boolean getBool(String field) {
+        try { var f = SCTConfig.class.getDeclaredField(field); f.setAccessible(true); return f.getBoolean(null); }
+        catch (Exception e) { return false; }
+    }
+
+    private void toggleBool(String field) {
+        try { var f = SCTConfig.class.getDeclaredField(field); f.setAccessible(true); f.setBoolean(null, !f.getBoolean(null)); }
+        catch (Exception ignored) {}
+    }
+
+    private static int argb(int a, int r, int g, int b) {
+        return ((a&0xFF)<<24)|((r&0xFF)<<16)|((g&0xFF)<<8)|(b&0xFF);
+    }
+
+    @Override public boolean shouldPause() { return false; }
+}
